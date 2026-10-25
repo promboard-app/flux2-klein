@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "id": "promboard.flux2-klein",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "name": "FLUX.2 [klein] 4B — 글로 만들기 · 참조 이미지로 고치기",
   "description": "Black Forest Labs 의 FLUX.2 [klein] 4B 로 프롬프트 글에서 이미지를 만들고, 참조 이미지(4장까지)를 이으면 그 이미지를 고치거나 섞는다. 증류판은 4단계로 빠르고 Base 는 결과가 더 다양하다. 경량화 설정으로 판과 정밀도(원본 bf16 · unsloth GGUF Q8 · Q4)를 고르고 고른 판만 받는다 — 공통 파일 8.2GB + 트랜스포머 2.6~7.8GB. 그래픽카드 메모리 6GB 이상. Apache-2.0. PromBoard 팀은 만들기만 하고 실제로 돌려 보지 않았다(검증 안 됨).",
   "author": "PromBoard",

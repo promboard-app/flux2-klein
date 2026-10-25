@@ -5,6 +5,9 @@
   - 아니면 부품마다 따로 정한다. 자기 몫까지 혼자 들어가는 부품은 '쓸 때만 올리기'(accelerate cpu_offload_with_hook — 쓸
     차례에 통째로 올리고 다음 부품이 쓰일 때 내린다, diffusers enable_model_cpu_offload 와 같은 방식). 혼자도 안 들어가는 부품은
     '조각씩 올리기'(diffusers apply_group_offloading block_level — 블록 하나씩 올려 계산한다. 느리지만 VRAM 이 적게 든다).
+  - 쓸 때만 올리는 부품 바로 뒤에 조각씩 올리는 부품이 오면, 그 부품이 계산을 시작할 때 앞 부품을 내린다(offload_before).
+    accelerate 는 앞 부품을 다음 '쓸 때만 올리기' 부품이 쓰일 때만 내리므로, 그대로 두면 글 인코더가 트랜스포머가 도는 내내
+    VAE 차례까지 그래픽카드에 남는다.
   - GGUF 로 줄인 트랜스포머는 조각씩 올리기를 하지 않는다(no_group). 혼자 안 들어가면 MemoryError — 노드가 더 가벼운 판을
     고르라는 오류 글로 바꾼다.
 diffusers 는 한 파이프라인에 '쓸 때만 올리기'와 '조각씩 올리기'를 같이 걸지 못하게 막아서(enable_model_cpu_offload 가 거절)
@@ -52,12 +55,14 @@ def free_vram():
     return free
 
 
-def place(pipe, order, device, reserve, no_group=()):
+def place(pipe, order, device, reserve, no_group=(), stream=True):
     """파이프라인 부품을 device 에 맞게 올린다. 돌려주는 값: 부품 이름 → 'gpu' · 'hook' · 'group' · device.
 
     order     실행 순서의 부품 이름(예: ["text_encoder", "transformer", "vae"])
     reserve   부품 이름 → 그 부품이 계산할 때 더 쓰는 VRAM(활성값 · VAE 디코딩, 바이트)
     no_group  조각씩 올리기를 하지 않을 부품(GGUF 트랜스포머) — 혼자 안 들어가면 MemoryError
+    stream    조각씩 올리기에서 다음 블록을 미리 올린다(use_stream). 블록을 건너뛰는 모델(MOSS-Image 의 uncond_skip_layers)은
+              미리 올리는 순서가 첫 실행과 달라져 블록이 안 올라온 채 계산할 수 있어 False 로 부른다 — 블록마다 제가 올리고 내린다.
     """
     import torch
 
@@ -93,12 +98,29 @@ def place(pipe, order, device, reserve, no_group=()):
                 offload_device=torch.device("cpu"),
                 offload_type="block_level",
                 num_blocks_per_group=1,
-                use_stream=True,
+                use_stream=stream,
                 low_cpu_mem_usage=True,
                 block_modules=block_modules(m) or None,
             )
+            if hook is not None:
+                offload_before(m, hook)
             plan[name] = "group"
     return plan
+
+
+def offload_before(module, prev_hook):
+    """조각씩 올리는 부품(module)이 계산을 시작하기 전에 앞의 '쓸 때만 올리기' 부품(prev_hook)이 그래픽카드에 있으면 내린다.
+    VAE 의 encode · decode 는 forward 를 거치지 않으므로 바로 아래 자식 모듈에도 단다."""
+    import torch
+
+    def pre_hook(_module, _args):
+        p = next(prev_hook.model.parameters(), None)
+        if p is not None and p.device.type != "cpu":
+            prev_hook.offload()
+            torch.cuda.empty_cache()
+
+    for m in (module, *module.children()):
+        m.register_forward_pre_hook(pre_hook)
 
 
 def release(pipe):
